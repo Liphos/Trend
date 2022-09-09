@@ -5,39 +5,60 @@ class SimpleModel(F.Module):
         super(SimpleModel, self).__init__()
         self.layers = []
         
-        self.conv1 = F.Conv1d(1, 16, kernel_size=15, padding=7)
+        self.conv1 = F.Conv1d(1, 128, kernel_size=15, padding=7)
         self.layers.append(self.conv1)
+        
+        self.batch_norm1 = F.BatchNorm1d(128)
+        self.layers.append(self.batch_norm1)
                 
-        self.conv2 = F.Conv1d(16, 32, kernel_size=8, padding=3)
+        self.conv2 = F.Conv1d(128, 128, kernel_size=7, padding=3)
         self.layers.append(self.conv2)
         
-        self.conv3 = F.Conv1d(32, 64, kernel_size=8, padding=3)
+        self.batch_norm2 = F.BatchNorm1d(128)
+        self.layers.append(self.batch_norm2)
+        
+        self.conv3 = F.Conv1d(128, 128, kernel_size=7, padding=3)
         self.layers.append(self.conv3)
         
-
-        self.dense1 = F.Linear(383*32, 4096)
+        self.batch_norm3 = F.BatchNorm1d(128)
+        self.layers.append(self.batch_norm3)
+        
+        self.conv4 = F.Conv1d(128, 128, kernel_size=7, padding=3)
+        self.layers.append(self.conv3)
+        
+        self.batch_norm4 = F.BatchNorm1d(128)
+        self.layers.append(self.batch_norm4)
+        
+        self.dense1 = F.Linear(12*128, 1024)
         self.layers.append(self.dense1)
-        self.dense2 = F.Linear(4096, 1)
+        self.dense2 = F.Linear(1024, 1)
         self.layers.append(self.dense2)
         
-        self.dropout = F.Dropout(0.5)
+        self.dropout = F.Dropout(0.1)
         self.layers.append(self.dropout)
         
         self.activation = F.ReLU()
         self.layers.append(self.activation)
         
-        self.maxpool = F.MaxPool1d(2)
+        self.maxpool = F.MaxPool1d(7, stride=4, padding=3)
         self.layers.append(self.maxpool)
         
         self.flatten = F.Flatten()
         self.sigmoid = F.Sigmoid()
     
     def forward(self, x):
-        x = self.activation(self.dropout(self.conv1(x)))
+        x = self.maxpool(self.conv1(x))
+        x = self.dropout(self.activation(self.batch_norm1(x)))
+        
+        x = self.dropout(self.activation(self.activation(self.batch_norm2(self.conv2(x))) + x))
         x = self.maxpool(x)
-        x = self.activation(self.dropout(self.conv2(x)))
-        #x = self.maxpool(x)
-        #x = self.activation(self.dropout(self.conv3(x)))
+        
+        x = self.dropout(self.activation(self.activation(self.batch_norm3(self.conv3(x))) + x))
+        x = self.maxpool(x)
+        
+        x = self.dropout(self.activation(self.activation(self.batch_norm4(self.conv4(x))) + x))
+#        x = self.maxpool(x)
+        
         x = self.flatten(x)
         x = self.activation(self.dense1(x))
         x = self.sigmoid(self.dense2(x))

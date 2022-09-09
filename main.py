@@ -31,7 +31,7 @@ except:
     print("Unknown exception")
     
     
-comment = "exp_scheduler"
+comment = "trend_model"
 tensorboard_log_dir = "./Models/"+ dataset_name + "/" + comment + "-" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") # + str(len(os.listdir("./Models/"+ dataset_name))) To count the experiments
 
 
@@ -44,12 +44,13 @@ model = SimpleModel().to(device)
 
 #Define loss funct and optimizer
 criterion = torch.nn.BCELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-4)
 lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1)
 batch_size = 10
 
 #Import dataset
-data_train, data_test = import_dataset(dataset_name)
+dataset_args = {"use_fourier_transform":False}
+data_train, data_test = import_dataset(dataset_name, split=0.2, shuffle=True, extra_args=dataset_args)
 
 print(data_train[0].shape, data_train[1].shape)
 for k in range(1):
@@ -77,11 +78,7 @@ def train_epoch(epoch:int, data, data_labels, is_testing:bool=False):
         inputs, labels = data[i*batch_size: np.minimum((i+1)*batch_size, size)], data_labels[i*batch_size: np.minimum((i+1)*batch_size, size)] #We normalize the inputs
         # Every data instance is an input + label pair
         inputs = torch.as_tensor(inputs, dtype=torch.float32, device=device)
-        inputs = torch.unsqueeze(inputs, dim=1)
-        
         labels = torch.as_tensor(labels, dtype=torch.float32, device=device)
-        labels = torch.unsqueeze(labels, dim=1)
-        
         # Zero your gradients for every batch!
         optimizer.zero_grad()
         if is_testing:
@@ -125,14 +122,14 @@ def train_epoch(epoch:int, data, data_labels, is_testing:bool=False):
             mean_counter = 0
 
 #training
-nb_epoch = 40 
+nb_epoch = 30 
 for i in range(nb_epoch):
     print(f"epoch: {i}, lr: {lr_scheduler.get_last_lr()}")
     train_epoch(i, data_train[0], data_train[1])
     train_epoch(i, data_test[0], data_test[1], is_testing=True)
-    torch.save(model.state_dict, tensorboard_log_dir + "/checkpoint" + str(nb_epoch) + ".pth")
+    if i % 5 == 0:
+        torch.save(model.state_dict, tensorboard_log_dir + "/checkpoint" + str(nb_epoch) + ".pth")
     
-model.save_txt(tensorboard_log_dir + "/architecture.txt")
 
 writer.flush()
 writer.close()
