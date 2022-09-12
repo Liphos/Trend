@@ -1,5 +1,6 @@
 import numpy as np
 from datasets import load_dataset
+from keras.datasets import mnist
 from binreader import open_binary_file
 from pathlib import Path
 from typing import Dict
@@ -7,7 +8,9 @@ from typing import Dict
 def import_dataset(name:str, split:float=0.2, shuffle=True, extra_args:Dict[str, bool]={}):
     datasets = {"minds14":import_minds_hugging_face,
                 "trend":import_data_TREND,
+                "mnist": import_mnist,
                 }
+    
     if name in datasets:
         return datasets[name](split, shuffle, extra_args)
     else:
@@ -21,6 +24,29 @@ def import_minds_hugging_face(split:float, shuffle:bool, extra_args:Dict[str, bo
 
     return (minds["train"], minds["test"])
 
+def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
+    print(Warning("Split is not supported for MNIST yet"))
+    (data_train, labels_train), (data_test, labels_test) = mnist.load_data()
+    
+    max_classes = 10
+    if "max_classes" in extra_args:
+        max_classes = extra_args["max_classes"]
+        
+    impurity = 0
+    if "impurity" in extra_args:
+        impurity = extra_args["impurity"]
+        
+    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
+    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
+    
+    indicies_train = np.where(labels_train<max_classes)[0]
+    data_train, labels_train = np.expand_dims(data_train[indicies_train], axis=1), np.expand_dims(labels_train[indicies_train],axis=-1)
+    
+    indicies_test = np.where(labels_test<max_classes)[0]
+    data_test, labels_test = np.expand_dims(data_test[indicies_test], axis=1), np.expand_dims(labels_test[indicies_test], axis=-1)
+    
+    return (data_train, labels_train), (data_test, labels_test)
+    
 def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #Data for signal analysis
     if "use_fourier_transform" in extra_args:
@@ -46,6 +72,7 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     np.random.shuffle(indicies)
     data_anthropique = data_anthropique[indicies]
     
+    use_fourier_transform = False
     if use_fourier_transform:
         data_selected_fft = np.fft.fft(data_selected)
         data_anthropique_fft = np.fft.fft(data_anthropique)
