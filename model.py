@@ -1,15 +1,22 @@
 import torch.nn as F
+import torch
 
 class SimpleModel(F.Module):
     def __init__(self):
         super(SimpleModel, self).__init__()
         self.layers = []
         
-        self.conv1 = F.Conv1d(1, 128, kernel_size=15, padding=7)
-        self.layers.append(self.conv1)
+        self.conv1_sig = F.Conv1d(1, 64, kernel_size=15, padding=7)
+        self.layers.append(self.conv1_sig)
         
-        self.batch_norm1 = F.BatchNorm1d(128)
-        self.layers.append(self.batch_norm1)
+        self.conv1_fft = F.Conv1d(2, 64, kernel_size=15, padding=7)
+        self.layers.append(self.conv1_fft)
+        
+        self.batch_norm1_sig = F.BatchNorm1d(64)
+        self.layers.append(self.batch_norm1_sig)
+        
+        self.batch_norm1_fft = F.BatchNorm1d(64)
+        self.layers.append(self.batch_norm1_fft)
                 
         self.conv2 = F.Conv1d(128, 128, kernel_size=7, padding=3)
         self.layers.append(self.conv2)
@@ -47,8 +54,13 @@ class SimpleModel(F.Module):
         self.sigmoid = F.Sigmoid()
     
     def forward(self, x):
-        x = self.maxpool(self.conv1(x))
-        x = self.dropout(self.activation(self.batch_norm1(x)))
+        x_sig = self.maxpool(self.conv1_sig(x[:, :1, :]))
+        x_sig = self.dropout(self.activation(self.batch_norm1_sig(x_sig)))
+        
+        x_fft = self.maxpool(self.conv1_fft(x[:, 1:, :]))
+        x_fft = self.dropout(self.activation(self.batch_norm1_fft(x_fft)))
+        
+        x = torch.cat([x_sig, x_fft], axis=1)
         
         x = self.dropout(self.activation(self.activation(self.batch_norm2(self.conv2(x))) + x))
         x = self.maxpool(x)
@@ -57,7 +69,7 @@ class SimpleModel(F.Module):
         x = self.maxpool(x)
         
         x = self.dropout(self.activation(self.activation(self.batch_norm4(self.conv4(x))) + x))
-#        x = self.maxpool(x)
+        #x = self.maxpool(x)
         
         x = self.flatten(x)
         x = self.activation(self.dense1(x))

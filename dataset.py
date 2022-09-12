@@ -47,16 +47,26 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     data_anthropique = data_anthropique[indicies]
     
     if use_fourier_transform:
-        data_selected = np.stack([np.fft.fft(data_selected).real, np.fft.fft(data_selected).imag], axis=1)
-        data_anthropique = np.stack([np.fft.fft(data_anthropique).real, np.fft.fft(data_anthropique).imag], axis=1)
+        data_selected_fft = np.fft.fft(data_selected)
+        data_anthropique_fft = np.fft.fft(data_anthropique)
+        
+        data_selected_fft_r = data_selected_fft.real/np.expand_dims(np.maximum(np.max(data_selected_fft.real, axis=-1), -np.min(data_selected_fft.real, axis=-1)), axis=-1)
+        data_selected_fft_i = data_selected_fft.imag/np.expand_dims(np.maximum(np.max(data_selected_fft.imag, axis=-1), -np.min(data_selected_fft.imag, axis=-1)), axis=-1)
+        data_selected = np.stack([data_selected, data_selected_fft_r, data_selected_fft_i], axis=1)
+        
+        data_anthropique_fft_r = data_anthropique_fft.real/np.expand_dims(np.maximum(np.max(data_anthropique_fft.real, axis=-1), -np.min(data_anthropique_fft.real, axis=-1)), axis=-1)
+        data_anthropique_fft_i = data_anthropique_fft.imag/np.expand_dims(np.maximum(np.max(data_anthropique_fft.imag, axis=-1), -np.min(data_anthropique_fft.imag, axis=-1)), axis=-1)
+        data_anthropique = np.stack([data_anthropique, data_anthropique_fft_r, data_anthropique_fft_i], axis=1)
+
         data_train = np.concatenate([data_selected[:int(data_size*(1-split))], data_anthropique[:int(data_size*(1-split))]], axis=0)
         data_test = np.concatenate([data_selected[int(data_size*(1-split)):], data_anthropique[int(data_size*(1-split)):]], axis=0)
         
     else:
         data_train = np.expand_dims(np.concatenate([data_selected[:int(data_size*(1-split))], data_anthropique[:int(data_size*(1-split))]]), axis=1)
         data_test = np.expand_dims(np.concatenate([data_selected[int(data_size*(1-split)):], data_anthropique[int(data_size*(1-split)):]]), axis=1)
-        data_train = data_train - np.expand_dims(np.mean(data_train, axis=-1), axis=-1) #We normalize the input
-        data_test = data_test - np.expand_dims(np.mean(data_test, axis=-1), axis=-1)
+    
+    data_train = data_train - np.expand_dims(np.mean(data_train, axis=-1), axis=-1) #We normalize the input
+    data_test = data_test - np.expand_dims(np.mean(data_test, axis=-1), axis=-1)
     
     labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size*(1-split)),)), np.zeros((int(data_size*(1-split)),))]), axis=1)
     labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size*(split)),)), np.zeros((int(data_size*(split)),))]), axis=1)
