@@ -11,18 +11,18 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import import_dataset
-from model import SimpleSignalModel, SimpleImageModel
-from utils import create_batch_tensorboard, logical_and_array
+from model import SimpleSignalModel, SimpleMnisteModel, SimpleCifarModel, ResnetCifarModel
+from utils.utils import create_batch_tensorboard, logical_and_array
 
 
 config = {
-    "dataset": {"name":"trend",
-                "extra_args": {"max_classes": 2, "impurity": 0.2}},
+    "dataset": {"name":"cifar10",
+                "extra_args": {"max_classes": 2, "impurity": 0}},
     "optimizer": {"name": "Adam", "lr":1e-3, "weight_decay":1e-4},
-    "training":{"num_epochs":8, "batch_size":10, "cross_training":3},
-    "model": SimpleSignalModel,
+    "training":{"num_epochs":10, "batch_size":64, "cross_training":1},
+    "model": ResnetCifarModel,
     "device":"cuda" if torch.cuda.is_available() else "cpu",
-    "comment": "ensemble_impurity"
+    "comment": "test_convergence"
 }
 
 
@@ -116,10 +116,11 @@ cross_training = config["training"]["cross_training"]
 models = []
 for training_iter in range(cross_training):
     if cross_training != 1:
-        data_train_split = data_train[int((len(data_train)/cross_training) * training_iter):int((len(data_train)/cross_training) * training_iter + 1)]
+        data_train_split = data_train[int((len(data_train) *(1-0.8)*(training_iter/cross_training))):int((len(data_train) * (0.8 + (1-0.8) * (training_iter/cross_training))))]
+        labels_train_split = labels_train[int((len(labels_train) *(1-0.8)*(training_iter/cross_training))):int((len(labels_train) * (0.8 + (1-0.8) * (training_iter/cross_training))))]
     else:
         data_train_split = data_train
-    labels_train_split = labels_train[int((len(labels_train)/cross_training) * training_iter):int((len(labels_train)/cross_training) * training_iter + 1)]
+        labels_train_split = labels_train
     
     #Create model for training 
     model = config["model"]().to(config["device"])
@@ -137,7 +138,7 @@ for training_iter in range(cross_training):
     #training
     for epoch in range(config["training"]["num_epochs"]):
         print(f"training_iter: [{training_iter+1}/{cross_training}], epoch: {epoch}, lr: {lr_scheduler.get_last_lr()}")
-        train_epoch_initializer(epoch=epoch, data=data_train, data_labels = labels_train)
+        train_epoch_initializer(epoch=epoch, data=data_train_split, data_labels = labels_train_split)
         train_epoch_initializer(epoch=epoch, data=data_test, data_labels=labels_test, is_testing=True)
         if epoch % 5 == 0:
             torch.save(model.state_dict, tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
@@ -146,16 +147,14 @@ for training_iter in range(cross_training):
 
 
 #Testing model
-indicies_impure = np.where(np.random.rand(len(labels_test))<0.2)[0]
-labels_test_impure = np.copy(labels_test)
-labels_test_impure[indicies_impure] = 1 - labels_test[indicies_impure]
+#indicies_impure = np.where(np.random.rand(len(labels_test))<0.2)[0]
+#labels_test_impure = np.copy(labels_test)
+#labels_test_impure[indicies_impure] = 1 - labels_test[indicies_impure]
 
-new_labels = torch.as_tensor(labels_test_impure, dtype=torch.float32, device=config["device"])
-new_labels[logical_and_array([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))>=0.7, True, False)])] = 1
-new_labels[logical_and_array([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))<=1-0.7, True, False)])] = 0
-print(np.where(new_labels.cpu().numpy()[:,0]==labels_test_impure[:,0])[0].shape)
+new_labels = torch.as_tensor(labels_test, dtype=torch.float32, device=config["device"])
+new_labels[logical_and_array([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))>=0.7, True, False) for model in models])] = 1
+new_labels[logical_and_array([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))<=1-0.7, True, False) for model in models])] = 0
 print(np.where(new_labels.cpu().numpy()[:,0]==labels_test[:,0])[0].shape)
-print(new_labels)
 
 writer.flush()
-writer.close()
+writer.close()  

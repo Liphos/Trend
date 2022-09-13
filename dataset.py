@@ -1,6 +1,6 @@
 import numpy as np
 from datasets import load_dataset
-from keras.datasets import mnist
+from keras.datasets import mnist, cifar10
 from binreader import open_binary_file
 from pathlib import Path
 from typing import Dict
@@ -9,6 +9,7 @@ def import_dataset(name:str, split:float=0.2, shuffle=True, extra_args:Dict[str,
     datasets = {"minds14":import_minds_hugging_face,
                 "trend":import_data_TREND,
                 "mnist": import_mnist,
+                "cifar10":import_cifar10,
                 }
     
     if name in datasets:
@@ -35,18 +36,43 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     impurity = 0
     if "impurity" in extra_args:
         impurity = extra_args["impurity"]
-        
-    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
-    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
-    
+            
     indicies_train = np.where(labels_train<max_classes)[0]
     data_train, labels_train = np.expand_dims(data_train[indicies_train], axis=1), np.expand_dims(labels_train[indicies_train],axis=-1)
     
     indicies_test = np.where(labels_test<max_classes)[0]
     data_test, labels_test = np.expand_dims(data_test[indicies_test], axis=1), np.expand_dims(labels_test[indicies_test], axis=-1)
     
+    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
+    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
+
+    return (data_train, labels_train), (data_test, labels_test)
+
+def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
+    print(Warning("Split is not supported for Cifar yet"))
+    (data_train, labels_train), (data_test, labels_test) = cifar10.load_data()
+    data_train, data_test = np.swapaxes(np.swapaxes(data_train, 2, 3), 1, 2)/255, np.swapaxes(np.swapaxes(data_test, 2, 3), 1, 2)/255
+    
+    max_classes = 10
+    if "max_classes" in extra_args:
+        max_classes = extra_args["max_classes"]
+        
+    impurity = 0
+    if "impurity" in extra_args:
+        impurity = extra_args["impurity"]
+        
+    indicies_train = np.where(labels_train<max_classes)[0]
+    data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
+    
+    indicies_test = np.where(labels_test<max_classes)[0]
+    data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
+        
+    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
+    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
+    
     return (data_train, labels_train), (data_test, labels_test)
     
+
 def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #Data for signal analysis
     if "use_fourier_transform" in extra_args:
