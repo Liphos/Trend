@@ -34,8 +34,8 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         max_classes = extra_args["max_classes"]
         
     impurity = 0
-    if "impurity" in extra_args:
-        impurity = extra_args["impurity"]
+    if "impurity_signal" in extra_args:
+        impurity = extra_args["impurity_signal"]
             
     indicies_train = np.where(labels_train<max_classes)[0]
     data_train, labels_train = np.expand_dims(data_train[indicies_train], axis=1), np.expand_dims(labels_train[indicies_train],axis=-1)
@@ -43,8 +43,9 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     indicies_test = np.where(labels_test<max_classes)[0]
     data_test, labels_test = np.expand_dims(data_test[indicies_test], axis=1), np.expand_dims(labels_test[indicies_test], axis=-1)
     
-    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
-    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
+    #We add noise in the 1 class
+    indicies_impure = np.where((np.random.rand(labels_train.shape[0])<impurity) & (labels_train[:, 0]==1))[0]
+    labels_train[indicies_impure] = 0
 
     return (data_train, labels_train), (data_test, labels_test)
 
@@ -58,8 +59,8 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         max_classes = extra_args["max_classes"]
         
     impurity = 0
-    if "impurity" in extra_args:
-        impurity = extra_args["impurity"]
+    if "impurity_signal" in extra_args:
+        impurity = extra_args["impurity_signal"]
         
     indicies_train = np.where(labels_train<max_classes)[0]
     data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
@@ -67,9 +68,10 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     indicies_test = np.where(labels_test<max_classes)[0]
     data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
         
-    indicies_impure = np.where(np.random.rand(len(labels_train))<impurity)[0]
-    labels_train[indicies_impure] = 1 - labels_train[indicies_impure]
-    
+    #We add noise in the 1 class
+    indicies_impure = np.where((np.random.rand(labels_train.shape[0])<impurity) & (labels_train[:, 0]==1))[0]
+    labels_train[indicies_impure] = 0
+
     return (data_train, labels_train), (data_test, labels_test)
     
 
@@ -77,7 +79,8 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #Data for signal analysis
     if "use_fourier_transform" in extra_args:
         use_fourier_transform = extra_args["use_fourier_transform"]
-    
+    else:
+        use_fourier_transform = False
     data_selected = open_binary_file(Path("./data/MLP6_selected.bin"))/255
     data_anthropique = open_binary_file(Path("./data/MLP6_transient.bin"))/255
     data_anthropique2 = open_binary_file(Path("./data/MLP6_transient_2.bin"))/255
@@ -98,7 +101,6 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     np.random.shuffle(indicies)
     data_anthropique = data_anthropique[indicies]
     
-    use_fourier_transform = False
     if use_fourier_transform:
         data_selected_fft = np.fft.fft(data_selected)
         data_anthropique_fft = np.fft.fft(data_anthropique)
