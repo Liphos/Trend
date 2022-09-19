@@ -1,29 +1,38 @@
 import numpy as np
-from datasets import load_dataset
+import torch
+
 from keras.datasets import mnist, cifar10
+
 from binreader import open_binary_file
 from pathlib import Path
 from typing import Dict
+import matplotlib.pyplot as plt
+
+from utils.utils import logical_and_arrays, logical_or_arrays
 
 def import_dataset(name:str, split:float=0.2, shuffle=True, extra_args:Dict[str, bool]={}):
-    datasets = {"minds14":import_minds_hugging_face,
-                "trend":import_data_TREND,
+    datasets = {"trend":import_data_TREND,
+                "noise_trend": import_noise_TREND,
                 "mnist": import_mnist,
                 "cifar10":import_cifar10,
+                "noisy_cifar10":import_noisy_cifar10,
                 }
     
     if name in datasets:
         return datasets[name](split, shuffle, extra_args)
     else:
         raise ValueError("This key is not associated with a dataset")
-
-
-def import_minds_hugging_face(split:float, shuffle:bool, extra_args:Dict[str, bool]):
-    minds = load_dataset("PolyAI/minds14", "fr-FR") # for French
-    audio_input = np.array([minds["train"][i]["audio"]["array"] for i in range(len(minds["train"]))])
-    intent_class = np.array([minds["train"][i]["intent_class"] for i in range(len(minds["train"]))])
-
-    return (minds["train"], minds["test"])
+    
+def add_impurity(labels:np.ndarray, nb_classes:int, impure_class:int, impurity_level:float):
+    if impurity_level == 0:
+        return labels
+    assert np.max(labels) <=1, "this is for biclassification"
+    indicies_impure = np.where((np.random.rand(labels.shape[0])<impurity_level) & (labels[:, 0]==impure_class))[0]
+    if nb_classes == 2:
+        labels[indicies_impure] = 1 - impure_class
+    else:
+        raise ValueError("Not implemented yet")
+    return labels
 
 def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     print(Warning("Split is not supported for MNIST yet"))
@@ -33,22 +42,34 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     if "max_classes" in extra_args:
         max_classes = extra_args["max_classes"]
         
-    impurity = 0
-    if "impurity_signal" in extra_args:
-        impurity = extra_args["impurity_signal"]
+    if max_classes is not None:
+        if type(max_classes) == int:
+            if max_classes <10:
+                indicies_train = np.where(labels_train<max_classes)[0]
+                data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
+                
+                indicies_test = np.where(labels_test<max_classes)[0]
+                data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
+                
+        elif(type(max_classes) == list):
+            indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_train[indicies_train[incr]] = incr
+            data_train, labels_train = data_train[logical_or_arrays(indicies_train)], labels_train[logical_or_arrays(indicies_train)]
             
-    indicies_train = np.where(labels_train<max_classes)[0]
-    data_train, labels_train = np.expand_dims(data_train[indicies_train], axis=1), np.expand_dims(labels_train[indicies_train],axis=-1)
-    
-    indicies_test = np.where(labels_test<max_classes)[0]
-    data_test, labels_test = np.expand_dims(data_test[indicies_test], axis=1), np.expand_dims(labels_test[indicies_test], axis=-1)
-    
+            indicies_test = [labels_test[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_test[indicies_test[incr]] = incr
+            data_test, labels_test = data_test[logical_or_arrays(indicies_test)], labels_test[logical_or_arrays(indicies_test)]
+        else:
+            raise TypeError("MaxClasses is not the good type")
+        
     #We add noise in the 1 class
-    indicies_impure = np.where((np.random.rand(labels_train.shape[0])<impurity) & (labels_train[:, 0]==1))[0]
-    labels_train[indicies_impure] = 0
+    if extra_args["impurity_level"]>0:
+        labels_train = add_impurity(labels_train, max_classes, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
 
     return (data_train, labels_train), (data_test, labels_test)
-
+    
 def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     print(Warning("Split is not supported for Cifar yet"))
     (data_train, labels_train), (data_test, labels_test) = cifar10.load_data()
@@ -58,22 +79,86 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     if "max_classes" in extra_args:
         max_classes = extra_args["max_classes"]
         
-    impurity = 0
-    if "impurity_signal" in extra_args:
-        impurity = extra_args["impurity_signal"]
-        
-    indicies_train = np.where(labels_train<max_classes)[0]
-    data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
-    
-    indicies_test = np.where(labels_test<max_classes)[0]
-    data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
+    if max_classes is not None:
+        if type(max_classes) == int:
+            if max_classes <10:
+                indicies_train = np.where(labels_train<max_classes)[0]
+                data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
+                
+                indicies_test = np.where(labels_test<max_classes)[0]
+                data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
+                
+        elif(type(max_classes) == list):
+            indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_train[indicies_train[incr]] = incr
+            data_train, labels_train = data_train[logical_or_arrays(indicies_train)], labels_train[logical_or_arrays(indicies_train)]
+            
+            indicies_test = [labels_test[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_test[indicies_test[incr]] = incr
+            data_test, labels_test = data_test[logical_or_arrays(indicies_test)], labels_test[logical_or_arrays(indicies_test)]
+        else:
+            raise TypeError("max_classes has not the good type")
         
     #We add noise in the 1 class
-    indicies_impure = np.where((np.random.rand(labels_train.shape[0])<impurity) & (labels_train[:, 0]==1))[0]
-    labels_train[indicies_impure] = 0
+    if extra_args["impurity_level"]>0:
+        labels_train = add_impurity(labels_train, max_classes, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
 
     return (data_train, labels_train), (data_test, labels_test)
     
+def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]): 
+    noise_file = torch.load('./data/CIFAR-10_human.pt')
+    random_label = noise_file['random_label1']
+    random_label = np.expand_dims(random_label, axis=-1)
+    
+    max_classes = 10
+    if "max_classes" in extra_args:
+        max_classes = extra_args["max_classes"]
+        
+    (data_train, labels_train), (data_test, labels_test) = cifar10.load_data()
+    
+    labels_train = random_label
+    
+    max_classes = 10
+    if "max_classes" in extra_args:
+        max_classes = extra_args["max_classes"]
+        
+    if max_classes is not None:
+        if type(max_classes) == int:
+            if max_classes <10:
+                indicies_train = np.where(labels_train<max_classes)[0]
+                data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
+                
+                indicies_test = np.where(labels_test<max_classes)[0]
+                data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
+                
+        elif(type(max_classes) == list):
+            indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_train[indicies_train[incr]] = incr
+            data_train, labels_train = data_train[logical_or_arrays(indicies_train)], labels_train[logical_or_arrays(indicies_train)]
+            
+            indicies_test = [labels_test[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_test[indicies_test[incr]] = incr
+            data_test, labels_test = data_test[logical_or_arrays(indicies_test)], labels_test[logical_or_arrays(indicies_test)]
+        else:
+            raise TypeError("max_classes has not the good type")
+    
+    data_train, data_test = np.swapaxes(np.swapaxes(data_train, 2, 3), 1, 2)/255, np.swapaxes(np.swapaxes(data_test, 2, 3), 1, 2)/255
+    
+    return (data_train, labels_train), (data_test, labels_test)
+    
+def import_noise_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
+    """Import only a file with noise
+    """
+    data_anthropique = open_binary_file(Path("./data/MLP6_transient_2.bin"))/255
+    data_anthropique = np.expand_dims(data_anthropique[:, 256:], axis=1)
+    data_anthropique = data_anthropique - np.expand_dims(np.mean(data_anthropique, axis=-1), axis=-1) #We normalize the input
+    labels = np.zeros((len(data_anthropique), 1))
+    
+    return (None, None), (data_anthropique, labels)
 
 def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #Data for signal analysis
