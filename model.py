@@ -1,25 +1,25 @@
 import torch.nn as F
 import torch
 
-class ResBlock(F.Module):
-    def __init__(self, in_channels:int, out_channels:int, kernel_size:int, stride:int, padding:int=None, downsample:bool=False):   
+class ResBlock1d(F.Module):
+    def __init__(self, in_channels:int, out_channels:int, kernel_size:int, stride:int=2, padding:int=None, downsample:bool=False):   
         super().__init__()
         if padding is None:
             padding = int(kernel_size/2)
             
         if downsample:
-            self.conv1 = F.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
+            self.conv1 = F.Conv1d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
             self.shortcut = F.Sequential(
-                F.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
-                F.BatchNorm2d(out_channels)
+                F.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride),
+                F.BatchNorm1d(out_channels)
             )
         else:
-            self.conv1 = F.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=padding)
+            self.conv1 = F.Conv1d(in_channels, out_channels, kernel_size=kernel_size, padding=padding)
             self.shortcut = F.Sequential()
 
-        self.conv2 = F.Conv2d(out_channels, out_channels, kernel_size=kernel_size, padding=padding)
-        self.bn1 = F.BatchNorm2d(out_channels)
-        self.bn2 = F.BatchNorm2d(out_channels)
+        self.conv2 = F.Conv1d(out_channels, out_channels, kernel_size=kernel_size, padding=padding)
+        self.bn1 = F.BatchNorm1d(out_channels)
+        self.bn2 = F.BatchNorm1d(out_channels)
         
     def forward(self, input:torch.Tensor):
         shortcut = self.shortcut(input)
@@ -28,38 +28,39 @@ class ResBlock(F.Module):
         input = input + shortcut
         return F.ReLU()(input)
 
-class ResNet18(F.Module):
-    def __init__(self, in_channels:int, resblock:F.Module, kernel_size:int=3, outputs:int=1000, last_activation:str=None):
+class ResNet1d18(F.Module):
+    def __init__(self, in_channels:int, resblock:F.Module=ResBlock1d, kernel_size:int=3, outputs:int=1000, last_activation:str=None):
         super().__init__()
         self.layer0 = F.Sequential(
-            F.Conv2d(in_channels, 64, kernel_size=15, stride=2, padding=7),
-            F.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            F.BatchNorm2d(64),
+            F.Conv1d(in_channels, 16, kernel_size=15, stride=2, padding=7),
+            F.MaxPool1d(kernel_size=3, stride=2, padding=1),
+            F.BatchNorm1d(16),
             F.ReLU()
         )
 
         self.layer1 = F.Sequential(
-            resblock(64, 64, kernel_size=7, downsample=False),
-            resblock(64, 64, kernel_size=7, downsample=False)
+            resblock(16, 16, kernel_size=kernel_size, downsample=False),
+            resblock(16, 16, kernel_size=kernel_size, downsample=False)
         )
 
         self.layer2 = F.Sequential(
-            resblock(64, 128, kernel_size=7, downsample=True),
-            resblock(128, 128, kernel_size=7, downsample=False)
+            resblock(16, 32, kernel_size=7, downsample=True),
+            resblock(32, 32, kernel_size=7, downsample=False)
         )
 
         self.layer3 = F.Sequential(
-            resblock(128, 256, kernel_size=7, downsample=True),
-            resblock(256, 256, kernel_size=7, downsample=False)
+            resblock(32, 64, kernel_size=kernel_size, downsample=True),
+            resblock(64, 64, kernel_size=kernel_size, downsample=False)
         )
 
         self.layer4 = F.Sequential(
-            resblock(256, 512, kernel_size=7, downsample=True),
-            resblock(512, 512, kernel_size=7, downsample=False)
+            resblock(64, 128, kernel_size=kernel_size, downsample=True),
+            resblock(128, 128, kernel_size=kernel_size, downsample=False)
         )
 
-        self.gap = torch.nn.AdaptiveAvgPool2d(1)
-        self.fc = torch.nn.Linear(512, outputs)
+        self.gap = torch.nn.AdaptiveAvgPool1d(1)
+        self.fc = torch.nn.Linear(128, outputs)
+        self.flatten = F.Flatten()
         
         if last_activation == "Sigmoid":
             self.last_activation = torch.nn.Sigmoid()
@@ -68,18 +69,85 @@ class ResNet18(F.Module):
         
     def forward(self, input):
         input = self.layer0(input)
-        input = self.layer1(input)
+        #input = self.layer1(input) #We remove it because otherwise the model is to dense
         input = self.layer2(input)
         input = self.layer3(input)
         input = self.layer4(input)
         input = self.gap(input)
-        input = torch.flatten(input)
+        input = self.flatten(input)
         input = self.fc(input)
         output = self.last_activation(input)
         return output
     
-class SimpleSignalModel(F.Module):
+class ResnetImgModel(F.Module):
     def __init__(self):
+        super(ResnetImgModel, self).__init__()
+        self.layers = []
+        
+        self.conv1 = F.Conv2d(1, 32, kernel_size=7, padding=1)
+        self.layers.append(self.conv1)
+        
+        self.batch_norm1 = F.BatchNorm2d(32)
+        self.layers.append(self.batch_norm1)
+        
+        self.conv2 = F.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.layers.append(self.conv2)
+        
+        self.batch_norm2 = F.BatchNorm2d(32)
+        self.layers.append(self.batch_norm2)
+        
+        self.conv3 = F.Conv2d(32, 64, kernel_size=5, stride=2, padding=1)
+        self.layers.append(self.conv3)
+        
+        self.batch_norm3 = F.BatchNorm2d(64)
+        self.layers.append(self.batch_norm3)
+        
+        self.dense1 = F.Linear(64*8*8, 512)
+        self.layers.append(self.dense1)
+        self.dense2 = F.Linear(512, 1)
+        self.layers.append(self.dense2)
+        
+        self.dropout = F.Dropout(0.5)
+        self.layers.append(self.dropout)
+        
+        self.activation = F.ReLU()
+        self.layers.append(self.activation)
+        
+        self.maxpool = F.MaxPool2d(3, stride=2)
+        self.layers.append(self.maxpool)
+        
+        self.flatten = F.Flatten()
+        self.sigmoid = F.Sigmoid()
+    
+    def forward(self, x):
+        x = self.maxpool(self.conv1(x))
+        
+        x = self.dropout(self.activation(self.batch_norm1(x)))
+        
+        x = self.dropout(self.activation(self.activation(self.batch_norm2(self.conv2(x))) + x))
+    
+        x = self.dropout(self.activation(self.batch_norm3(self.conv3(x))))
+                
+        x = self.flatten(x)
+        x = self.activation(self.dense1(x))
+        x = self.sigmoid(self.dense2(x))
+        
+        return x
+    
+    def save_txt(self, filename:str):
+        """Save the layers in a txt
+
+        Args:
+            filename (str): path to the txt file
+        """
+        with open(filename, 'w') as f:
+            for layer in self.layers:
+                f.write(str(layer._get_name) + "\n")
+        f.close()
+
+
+class SimpleSignalModel(F.Module):
+    def __init__(self, last_activation:str=None):
         super(SimpleSignalModel, self).__init__()
         self.layers = []
         
@@ -122,7 +190,10 @@ class SimpleSignalModel(F.Module):
         self.layers.append(self.maxpool)
         
         self.flatten = F.Flatten()
-        self.sigmoid = F.Sigmoid()
+        if last_activation == "Sigmoid":
+            self.last_activation = torch.nn.Sigmoid()
+        else:
+            self.last_activation = torch.nn.Identity()
     
     def forward(self, x):
         x = self.maxpool(self.conv1(x))
@@ -139,7 +210,7 @@ class SimpleSignalModel(F.Module):
         
         x = self.flatten(x)
         x = self.activation(self.dense1(x))
-        x = self.sigmoid(self.dense2(x))
+        x = self.last_activation(self.dense2(x))
         
         return x
     

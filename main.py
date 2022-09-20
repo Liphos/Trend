@@ -13,30 +13,34 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import import_dataset, add_impurity
-from model import SimpleSignalModel, SimpleMnistModel, SimpleCifarModel, ResnetCifarModel
-from utils.utils import create_batch_tensorboard, logical_and_arrays
+from model import SimpleSignalModel, ResNet1d18, ResnetImgModel, SimpleMnistModel, SimpleCifarModel, ResnetCifarModel
+from utils.utils import create_batch_tensorboard, logical_and_arrays, focal_loss
 
 
 config = {
     "dataset": {"name":"trend",
-                "extra_args": {"max_classes": [0, 1], "impurity_level": 0}},
-    "optimizer": {"name": "Adam", "lr":1e-3, "weight_decay":1e-4},
-    "training":{"num_epochs":41, "batch_size":64, "mode":"testing", "extra_args":{"nb_models":100, "shared_data": 1, "nb_iter":40},},
-    "model": SimpleSignalModel,
+                "extra_args": {"max_classes": [0, 1], "impurity_level": 0, "mode":None, "import_more_noise":True}},
+    "optimizer": {"name": "Adam", "loss":"Focal", "lr":1e-3, "weight_decay":1e-4, "gamma":1},
+    "loss": {"name":"Focal", "extra_args": {"alpha": 0.25, "gamma": 3}},
+    "training":{"num_epochs":41, "batch_size":64, "mode":"cross_training", "extra_args":{"nb_models":1, "shared_data": 1, "nb_iter":40, "add_gauss_noise":0},},
+    "model": {"name":SimpleSignalModel, "extra_args":{"last_activation": "Sigmoid"}},
     "device":"cuda" if torch.cuda.is_available() else "cpu",
-    "comment": "hist_100_40e",
+    "comment": "weighted_noise_5_focal",
     "seed":0,
 }
+
 np.random.seed(config["seed"])
 
-def train_epoch(model:torch.nn.Module, training_iter:int, epoch:int, data:np.ndarray, data_labels:np.ndarray, optimizer=None, lr_scheduler=None, criterion:torch.nn=None, writer:SummaryWriter=None, is_testing:bool=False):
+def train_epoch(model:torch.nn.Module, training_iter:int, epoch:int, data:np.ndarray, data_labels:np.ndarray, optimizer=None, lr_scheduler=None, criterion:torch.nn=None, writer:SummaryWriter=None, is_testing:bool=False, add_gauss_noise:float=0):
     size = len(data)
     batch_size = config["training"]["batch_size"]
     #We shuffle the dataset
     indicies = np.arange(size)
     np.random.shuffle(indicies)
     data, data_labels = data[indicies], data_labels[indicies]
-    
+    if not is_testing:
+        data = data + np.random.normal(0, add_gauss_noise, data.shape)
+        
     if is_testing: #Indicate for dropout and batch norm that the model is training
         model.eval()
     else:
@@ -55,14 +59,14 @@ def train_epoch(model:torch.nn.Module, training_iter:int, epoch:int, data:np.nda
                 # Make predictions for this batch
                 outputs = model(inputs)
                 # Compute the loss and its gradients
-                loss = criterion(outputs, labels)
+                loss = criterion(inputs=outputs, targets=labels)
         else:        
             # Zero your gradients for every batch!
             optimizer.zero_grad()
             # Make predictions for this batch
             outputs = model(inputs)
             # Compute the loss and its gradients
-            loss = criterion(outputs, labels)
+            loss = criterion(inputs=outputs, targets=labels)
             
         accuracy = torch.mean(torch.where(torch.round(outputs)==labels, 1., 0.))
         
@@ -73,6 +77,8 @@ def train_epoch(model:torch.nn.Module, training_iter:int, epoch:int, data:np.nda
             writer.add_scalar("Metrics_"+ key +"/Accuracy", accuracy, (int(size/batch_size) + 1 ) * epoch + i, new_style=True if i==0 else False)
             writer.add_scalar("Metrics_"+ key +"/TPR", torch.mean(torch.where(torch.round(outputs[sig_mask])==1, 1., 0.)), (int(size/batch_size) + 1 ) * epoch + i, new_style=True if i==0 else False)
             writer.add_scalar("Metrics_"+ key +"/TNR", torch.mean(torch.where(torch.round(outputs[~sig_mask])==0, 1., 0.)), (int(size/batch_size) + 1 ) * epoch + i, new_style=True if i==0 else False)
+            writer.add_scalar("Metrics_"+ key +"/TNR", torch.mean(torch.where(torch.round(outputs[~sig_mask])==0, 1., 0.)), (int(size/batch_size) + 1 ) * epoch + i, new_style=True if i==0 else False)
+            writer.add_scalar("lr", lr_scheduler.get_last_lr()[0], (int(size/batch_size) + 1 ) * epoch + i, new_style=True if i==0 else False)
         
         mean_loss = (mean_loss * mean_counter + loss )/(mean_counter + 1)
         mean_accuracy = (mean_accuracy * mean_counter + accuracy )/(mean_counter + 1)
@@ -129,12 +135,17 @@ if config["training"]["mode"] == "cross_training":
             labels_train_split = labels_train
         
         #Create model for training 
-        model = config["model"]().to(config["device"])
+        model = config["model"]["name"](**config["model"]["extra_args"]).to(config["device"])
 
         #Define loss funct and optimizer
-        criterion = torch.nn.BCELoss()
+        if config["loss"]["name"] == "BCE":
+            criterion = torch.nn.BCELoss()
+        elif config["loss"]["name"] == "Focal":
+            criterion = partial(focal_loss, reduction='mean')
+        else:
+            raise ValueError("Unknown loss")
         optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"], weight_decay=config["optimizer"]["weight_decay"])
-        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config["optimizer"]["gamma"])
 
         writer = SummaryWriter(log_dir=tensorboard_log_dir + "/" + str(training_iter))
         create_batch_tensorboard(tensorboard_log_dir)
@@ -144,7 +155,7 @@ if config["training"]["mode"] == "cross_training":
         #training
         for epoch in range(config["training"]["num_epochs"]):
             print(f"training_iter: [{training_iter+1}/{cross_training}], epoch: {epoch}, lr: {lr_scheduler.get_last_lr()}")
-            train_epoch_initializer(epoch=epoch, data=data_train_split, data_labels = labels_train_split)
+            train_epoch_initializer(epoch=epoch, data=data_train_split, data_labels=labels_train_split, add_gauss_noise=config["training"]["extra_args"]["add_gauss_noise"])
             train_epoch_initializer(epoch=epoch, data=data_test, data_labels=labels_test, is_testing=True)
             if epoch % 2 == 0:
                 torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
@@ -158,16 +169,25 @@ elif config["training"]["mode"] == "relabelling":
     nb_iterations = config["training"]["extra_args"]["nb_iter"]
     nb_models = config["training"]["extra_args"]["nb_models"]
     
-    labels_copy = np.concatenate((labels_train, labels_test), axis=0)
+    data = np.concatenate((data_train, data_test), axis=0)
+    labels = np.concatenate((labels_train, labels_test), axis=0)
+    labels_copy = np.copy(labels)
+    
     lst_indicies_shuffle = []
     for training_iter in range(nb_iterations):
         #Create model for training 
         models = []
         for incr_model in range(nb_models):
-            model = config["model"]().to(config["device"])
+            print(f"training_iter: [{training_iter+1}/{nb_iterations}], model: [{incr_model+1}/{nb_models}]")
+            model = config["model"]["name"](**config["model"]["extra_args"]).to(config["device"])
 
             #Define loss funct and optimizer
-            criterion = torch.nn.BCELoss()
+            if config["loss"]["name"] == "BCE":
+                criterion = torch.nn.BCELoss()
+            elif config["loss"]["name"] == "Focal":
+                criterion = partial(focal_loss, reduction='mean')
+            else:
+                raise ValueError("Unknown loss")
             optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"], weight_decay=config["optimizer"]["weight_decay"])
             lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1)
 
@@ -177,33 +197,26 @@ elif config["training"]["mode"] == "relabelling":
             train_epoch_initializer = partial(train_epoch, model=model, training_iter=training_iter, optimizer=optimizer, lr_scheduler=lr_scheduler, criterion=criterion, writer=writer)
             
             #training
+            nb_epochs = config["training"]["num_epochs"]
             for epoch in range(config["training"]["num_epochs"]):
-                print(f"training_iter: [{training_iter+1}/{nb_iterations}], epoch: {epoch}, lr: {lr_scheduler.get_last_lr()}")
-                train_epoch_initializer(epoch=epoch, data=data_train, data_labels=labels_train)
-                train_epoch_initializer(epoch=epoch, data=data_test, data_labels=labels_test, is_testing=True)
+                train_epoch_initializer(epoch=epoch, data=data, data_labels=labels)
                 if epoch % 2 == 0:
                     torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
                 
             models.append(model)
         
         # Define new label  
-        new_labels = torch.as_tensor(labels_test, dtype=torch.float32, device=config["device"])
-        new_labels[logical_and_arrays([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))[:, 0]>=0.7, True, False) for model in models])] = 1
-        new_labels[logical_and_arrays([torch.where(model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"]))[:, 0]<=1-0.7, True, False) for model in models])] = 0
-        print(f"{np.where(new_labels.cpu().numpy()[:,0]==labels_test[:,0])[0].shape}/{len(labels_test)}")
-        labels_test = new_labels.cpu().numpy()
+        new_labels = torch.as_tensor(labels, dtype=torch.float32, device=config["device"])
+        data_tensor = torch.as_tensor(data, dtype=torch.float32, device=config["device"])
+        new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]>=0.7, True, False) for model in models])] = 1
+        new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]<=1-0.7, True, False) for model in models])] = 0
+        print(f"{np.where(new_labels.cpu().numpy()[:,0]==labels[:,0])[0].shape}/{len(labels)}")
+        labels = new_labels.cpu().numpy()
         
         #Reshuffle the training data and testing data
-        data = np.concatenate((data_train, data_test), axis=0)
-        labels = np.concatenate((labels_train, labels_test), axis=0)
         indicies = np.arange(len(data))
         np.random.shuffle(indicies)
         lst_indicies_shuffle.append(indicies)
-        
-        data_train, labels_train = data[indicies[:int(len(indicies)*0.8)]], labels[indicies[:int(len(labels)*0.8)]]
-        data_test, labels_test = data[indicies[int(len(indicies)*0.8):]], labels[indicies[int(len(indicies)*0.8):]]
-        
-        labels_train = add_impurity(labels_train, np.max(labels_train), 1, config["dataset"]["extra_args"]["impurity_signal"])
         
         if writer is not None:
             writer.flush()
@@ -219,8 +232,11 @@ elif config["training"]["mode"] == "relabelling":
     
         if dataset_name == "trend":
             (_, _), (noisy_data, noisy_label) = import_dataset("noise_trend")
-            pred_probs = np.mean([model(torch.as_tensor(noisy_data, dtype=torch.float32, device=config["device"])) for model in models], axis=0)
-            print("perf: ", torch.where(torch.round(pred_probs[:, 0]) == torch.as_tensor(noisy_label, dtype=torch.long, device=config["device"])[:, 0])[0].shape[0], len(noisy_label))
+            noisy_data_tensor = torch.as_tensor(noisy_data, dtype=torch.float32, device=config["device"])
+            pred_probs = np.mean([model(noisy_data_tensor).detach().cpu().numpy() for model in models], axis=0)
+            pred_probs_rounded = np.mean([np.round(model(noisy_data_tensor).detach().cpu().numpy()) for model in models], axis=0)
+            print("perf: ", np.where(np.round(pred_probs[:, 0]) == noisy_label[:, 0])[0].shape[0], len(noisy_label))
+            print("perf_rounded: ", np.where(np.round(pred_probs_rounded[:, 0]) == noisy_label[:, 0])[0].shape[0], len(noisy_label))
 
 elif config["training"]["mode"] == "testing":
     #Create model for training 
@@ -229,7 +245,7 @@ elif config["training"]["mode"] == "testing":
         if os.path.isdir(f"./Models/{dataset_name}/{folder}") and folder.startswith(config["comment"] + ''):
             for file in os.listdir(f"./Models/{dataset_name}/{folder}"):
                 if file.startswith("checkpoint40_") and file.endswith(".pth"):
-                    model = config["model"]().to(config["device"])
+                    model = config["model"]["name"](**config["model"]["extra_args"]).to(config["device"])
                     state_dict = torch.load(Path(f"./Models/{dataset_name}/{folder}/{file}")) 
                     model.load_state_dict(state_dict if type(state_dict) == collections.OrderedDict else state_dict())
                     model.eval()
@@ -256,10 +272,37 @@ elif config["training"]["mode"] == "testing":
     plt.show(block=True)
     
     pred_probs = model(data_test)
+    data_test = data_test.detach().cpu().numpy()
+    labels_test = labels_test.detach().cpu().numpy()
+    indicies = np.where(np.round(pred_probs[np.where(labels_test==1)[0], 0].detach().cpu().numpy())==1)[0]
+    #TP
+    for i in range(10):
+        plt.plot([i for i in range(len(data_test[0, 0]))], data_test[np.where(labels_test==1)[0]][indicies[i], 0])
+        plt.title("TP")
+        plt.show(block=True)
+    #FN
+    indicies = np.where(np.round(pred_probs[np.where(labels_test==1)[0], 0].detach().cpu().numpy())==0)[0]
+    for i in range(10):
+        plt.plot([i for i in range(len(data_test[0, 0]))], data_test[np.where(labels_test==1)[0]][indicies[i], 0])
+        plt.title("FN")
+        plt.show(block=True)
+    #FP
+    indicies = np.where(np.round(pred_probs[np.where(labels_test==0)[0], 0].detach().cpu().numpy())==1)[0]
+    for i in range(10):
+        plt.plot([i for i in range(len(data_test[0, 0]))], data_test[np.where(labels_test==0)[0]][indicies[i], 0])
+        plt.title("FP")
+        plt.show(block=True)
+    #TN
+    indicies = np.where(np.round(pred_probs[np.where(labels_test==0)[0], 0].detach().cpu().numpy())==0)[0]
+    for i in range(10):
+        plt.plot([i for i in range(len(data_test[0, 0]))], data_test[np.where(labels_test==0)[0]][indicies[i], 0])
+        plt.title("TN")
+        plt.show(block=True)
+        
     pred_probs = torch.cat((pred_probs, pred_probs), dim=-1)
     pred_probs[:, 0] = 1 - pred_probs[:, 0]
     
-    overlapping_class = cleanlab.dataset.find_overlapping_classes(labels=labels_test[:, 0].detach().cpu().numpy(), pred_probs=pred_probs.detach().cpu().numpy())
+    overlapping_class = cleanlab.dataset.find_overlapping_classes(labels=labels_test[:, 0], pred_probs=pred_probs.detach().cpu().numpy())
     print(overlapping_class.head())
 
 else:

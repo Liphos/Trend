@@ -1,5 +1,8 @@
 import numpy as np
 import torch
+import torchaudio
+import librosa
+import librosa.display
 
 from keras.datasets import mnist, cifar10
 
@@ -162,31 +165,44 @@ def import_noise_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
 
 def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #Data for signal analysis
-    if "use_fourier_transform" in extra_args:
-        use_fourier_transform = extra_args["use_fourier_transform"]
+    if "mode" in extra_args:
+        preprocessing_mode = extra_args["mode"]
     else:
-        use_fourier_transform = False
+        preprocessing_mode = None
+        
     data_selected = open_binary_file(Path("./data/MLP6_selected.bin"))/255
     data_anthropique = open_binary_file(Path("./data/MLP6_transient.bin"))/255
-    data_anthropique2 = open_binary_file(Path("./data/MLP6_transient_2.bin"))/255
     
-    data_selected = data_selected[:, 256:] #We remove the beginning where there is nothing
+    
+    if "import_more_noise"  in extra_args and extra_args["import_more_noise"]:
+        data_anthropique2 = open_binary_file(Path("./data/MLP6_transient_2.bin"))/255
+        data_anthropique3 = open_binary_file(Path("./data/MLP6_transient_3.bin"))/255
+        data_anthropique4 = open_binary_file(Path("./data/MLP6_transient_4.bin"))/255
+        data_anthropique5 = open_binary_file(Path("./data/MLP6_transient_5.bin"))/255
+        data_anthropique = np.concatenate([data_anthropique, data_anthropique2, data_anthropique3, data_anthropique4, data_anthropique5], axis=0)
+        
+    data_selected = data_selected[:, 256:] #We remove the beginning where there is nothing   
     data_anthropique = data_anthropique[:, 256:]
     
-    data_size = len(data_selected)
+    data_size_signal = len(data_selected)
+    data_size_noise = len(data_anthropique)
     print(data_selected.shape)
     print(data_anthropique.shape)
     
-    indicies = np.arange(len(data_selected))
+    indicies = np.arange(data_size_signal)
     np.random.shuffle(indicies)
     data_selected = data_selected[indicies]
     
     
-    indicies = np.arange(len(data_anthropique))
+    indicies = np.arange(data_size_noise)
     np.random.shuffle(indicies)
     data_anthropique = data_anthropique[indicies]
     
-    if use_fourier_transform:
+    if "import_more_noise"  in extra_args and extra_args["import_more_noise"]: #We put it here because if we shuffle the dataset after concatenating the train and test data will be identical
+        data_selected = np.repeat(data_selected, 5, axis=0)
+        data_size_signal = len(data_selected)
+    
+    if preprocessing_mode == "fft":
         data_selected_fft = np.fft.fft(data_selected)
         data_anthropique_fft = np.fft.fft(data_anthropique)
         
@@ -198,18 +214,36 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         data_anthropique_fft_i = data_anthropique_fft.imag/np.expand_dims(np.maximum(np.max(data_anthropique_fft.imag, axis=-1), -np.min(data_anthropique_fft.imag, axis=-1)), axis=-1)
         data_anthropique = np.stack([data_anthropique, data_anthropique_fft_r, data_anthropique_fft_i], axis=1)
 
-        data_train = np.concatenate([data_selected[:int(data_size*(1-split))], data_anthropique[:int(data_size*(1-split))]], axis=0)
-        data_test = np.concatenate([data_selected[int(data_size*(1-split)):], data_anthropique[int(data_size*(1-split)):]], axis=0)
+        data_train = np.concatenate([data_selected[:int(data_size_signal*(1-split))], data_anthropique[:int(data_size_noise*(1-split))]], axis=0)
+        data_test = np.concatenate([data_selected[int(data_size_signal*(1-split)):], data_anthropique[int(data_size_noise*(1-split)):]], axis=0)
+    
+    elif preprocessing_mode == "spectrogram":
+        data = np.concatenate([data_selected, data_anthropique], axis=0)
+        sgram = librosa.amplitude_to_db(abs(librosa.stft(data, n_fft=80)))
+        sgram = np.pad(sgram, [(0,0), (0, 1), (1, 2)])
+        sgram = sgram - np.mean(sgram, axis=(-2, -1), keepdims=True)
+        sgram = sgram/np.maximum(np.max(sgram, axis=(-2, -1), keepdims=True), -np.min(sgram, axis=(-2, -1), keepdims=True))
+                
+        data_signal = sgram[:data_size_signal]
+        data_noise = sgram[data_size_signal:]
         
+        data_train = np.expand_dims(np.concatenate([data_signal[:int(data_size_signal*(1-split))], data_noise[:int(data_size_noise*(1-split))]], axis=0), axis=1)
+        data_test = np.expand_dims(np.concatenate([data_signal[int(data_size_signal*(1-split)):], data_noise[int(data_size_noise*(1-split)):]], axis=0), axis=1)
+        
+        labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(1-split)),)), np.zeros((int(data_size_noise*(1-split)),))]), axis=1)
+        labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(split)),)), np.zeros((int(data_size_noise*(split)),))]), axis=1)
+        
+        return (data_train, labels_train), (data_test, labels_test)
+    
     else:
-        data_train = np.expand_dims(np.concatenate([data_selected[:int(data_size*(1-split))], data_anthropique[:int(data_size*(1-split))]]), axis=1)
-        data_test = np.expand_dims(np.concatenate([data_selected[int(data_size*(1-split)):], data_anthropique[int(data_size*(1-split)):]]), axis=1)
+        data_train = np.expand_dims(np.concatenate([data_selected[:int(data_size_signal*(1-split))], data_anthropique[:int(data_size_noise*(1-split))]]), axis=1)
+        data_test = np.expand_dims(np.concatenate([data_selected[int(data_size_signal*(1-split)):], data_anthropique[int(data_size_noise*(1-split)):]]), axis=1)
     
     data_train = data_train - np.expand_dims(np.mean(data_train, axis=-1), axis=-1) #We normalize the input
     data_test = data_test - np.expand_dims(np.mean(data_test, axis=-1), axis=-1)
     
-    labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size*(1-split)),)), np.zeros((int(data_size*(1-split)),))]), axis=1)
-    labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size*(split)),)), np.zeros((int(data_size*(split)),))]), axis=1)
+    labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(1-split)),)), np.zeros((int(data_size_noise*(1-split)),))]), axis=1)
+    labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(split)),)), np.zeros((int(data_size_noise*(split)),))]), axis=1)
         
     
     return (data_train, labels_train), (data_test, labels_test)
