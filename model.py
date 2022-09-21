@@ -1,7 +1,7 @@
 import torch.nn as F
 import torch
 
-class ResBlock1d(F.Module):
+class _ResBlock1d(F.Module):
     def __init__(self, in_channels:int, out_channels:int, kernel_size:int, stride:int=2, padding:int=None, downsample:bool=False):   
         super().__init__()
         if padding is None:
@@ -29,7 +29,7 @@ class ResBlock1d(F.Module):
         return F.ReLU()(input)
 
 class ResNet1d18(F.Module):
-    def __init__(self, in_channels:int, resblock:F.Module=ResBlock1d, kernel_size:int=3, outputs:int=1000, last_activation:str=None):
+    def __init__(self, in_channels:int, resblock:F.Module=_ResBlock1d, kernel_size:int=3, outputs:int=1000, last_activation:str=None):
         super().__init__()
         self.layer0 = F.Sequential(
             F.Conv1d(in_channels, 16, kernel_size=15, stride=2, padding=7),
@@ -416,3 +416,26 @@ class ResnetCifarModel(F.Module):
             for layer in self.layers:
                 f.write(str(layer._get_name) + "\n")
         f.close()
+
+
+dict_models = {
+    "ResNet1d18": ResNet1d18,
+    "ResnetImgModel": ResnetImgModel,
+    "SimpleSignalModel": SimpleSignalModel,
+    "SimpleMnistModel": SimpleMnistModel,
+    "SimpleCifarModel": SimpleCifarModel,
+    "ResnetCifarModel": ResnetCifarModel,
+}
+
+def model_by_name(model_name:str) -> F.Module:
+    """Return model class using the given name
+
+    Args:
+        model_name (str): the model name
+
+    Returns:
+        F.Module: the class corresponding to the name
+    """
+    if model_name in dict_models:
+        return dict_models[model_name]
+    raise ValueError("There is no model with the given name")
