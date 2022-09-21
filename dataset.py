@@ -123,10 +123,6 @@ def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     
     labels_train = random_label
     
-    max_classes = 10
-    if "max_classes" in extra_args:
-        max_classes = extra_args["max_classes"]
-        
     if max_classes is not None:
         if type(max_classes) == int:
             if max_classes <10:

@@ -16,7 +16,6 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import import_dataset, add_impurity
-from model import SimpleSignalModel, ResNet1d18, ResnetImgModel, SimpleMnistModel, SimpleCifarModel, ResnetCifarModel
 from utils.utils import create_batch_tensorboard, logical_and_arrays, focal_loss
 from yml_reader import read_config
 
@@ -80,7 +79,7 @@ def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Modu
             lr_scheduler.step()
             # Gather data and report
             
-        if (i % 30 == 29) or ((i+1) * batch_size >= size):
+        if not config["training"]["no_print"] and ((i % 30 == 29) or ((i+1) * batch_size >= size)):
             loss, current = loss.item(), i * batch_size + len(inputs) 
             key = "test" if is_testing else "train"
             print(f"{key}:{epoch}, loss: {mean_loss}, accuracy: {mean_accuracy}  [{current}/{size}]")
@@ -166,16 +165,13 @@ if __name__ == "__main__":
         nb_iterations = config["training"]["extra_args"]["nb_iter"]
         nb_models = config["training"]["extra_args"]["nb_models"]
         
-        data = np.concatenate((data_train, data_test), axis=0)
-        labels = np.concatenate((labels_train, labels_test), axis=0)
-        labels_copy = np.copy(labels)
+        data_test_tensor = torch.as_tensor(data_test, dtype=torch.float32, device=config["device"])
+        labels_test_tensor = torch.as_tensor(labels_test, dtype=torch.float32, device=config["device"])
         
-        lst_indicies_shuffle = []
         for training_iter in range(nb_iterations):
             #Create model for training 
             models = []
             for incr_model in range(nb_models):
-                print(f"training_iter: [{training_iter+1}/{nb_iterations}], model: [{incr_model+1}/{nb_models}]")
                 model = config["model"]["name"](**config["model"]["extra_args"]).to(config["device"])
 
                 #Define loss funct and optimizer
@@ -194,37 +190,30 @@ if __name__ == "__main__":
                 #training
                 nb_epochs = config["training"]["num_epochs"]
                 for epoch in range(config["training"]["num_epochs"]):
-                    train_epoch_initializer(epoch=epoch, data=data, data_labels=labels)
-                    if epoch % 2 == 0:
-                        torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
-                    
+                    train_epoch_initializer(epoch=epoch, data=data_train, data_labels=labels_train)
+                    torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(training_iter) +"_" + str(incr_model) + ".pth")
+                
+                pred_probs = model(data_test)
+                accuracy = torch.mean(torch.where(torch.round(pred_probs)==labels_test, 1., 0.))
+                print(f"training_iter: [{training_iter+1}/{nb_iterations}], model: [{incr_model+1}/{nb_models}], accuracy: {accuracy}")    
                 models.append(model)
             
             # Define new label  
-            new_labels = torch.as_tensor(labels, dtype=torch.float32, device=config["device"])
-            data_tensor = torch.as_tensor(data, dtype=torch.float32, device=config["device"])
+            new_labels = torch.as_tensor(labels_train, dtype=torch.float32, device=config["device"])
+            data_tensor = torch.as_tensor(data_train, dtype=torch.float32, device=config["device"])
             new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]>=0.7, True, False) for model in models])] = 1
             new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]<=1-0.7, True, False) for model in models])] = 0
-            print(f"{np.where(new_labels.cpu().numpy()[:,0]==labels[:,0])[0].shape}/{len(labels)}")
-            labels = new_labels.cpu().numpy()
+            print(f"{np.where(new_labels.cpu().numpy()[:,0]==labels_train[:,0])[0].shape}/{len(labels_train)}")
             
-            #Reshuffle the training data and testing data
-            indicies = np.arange(len(data))
-            np.random.shuffle(indicies)
-            lst_indicies_shuffle.append(indicies)
+            labels_train = new_labels.cpu().numpy()
+            
+            print(f"total signal: {np.where(labels_train == 1)[0].shape}/{len(labels_train)/2}")
+            print(f"total noise: {np.where(labels_train == 0)[0].shape}/{len(labels_train)/2}")
             
             if writer is not None:
                 writer.flush()
                 writer.close()  
             
-            labels_test_copy = labels_copy
-            for indicie in lst_indicies_shuffle[:-1]:
-                labels_test_copy = labels_test_copy[indicie]
-                
-            print(f"total changes: {np.where(labels_test_copy == labels)[0].shape}/{len(labels)}")
-            print(f"total signal: {np.where(labels == 1)[0].shape}/{len(labels)/2}")
-            print(f"total noise: {np.where(labels == 0)[0].shape}/{len(labels)/2}")
-        
             if dataset_name == "trend":
                 (_, _), (noisy_data, noisy_label) = import_dataset("noise_trend")
                 noisy_data_tensor = torch.as_tensor(noisy_data, dtype=torch.float32, device=config["device"])
@@ -302,4 +291,3 @@ if __name__ == "__main__":
 
     else:
         raise ValueError('This mode of training does not exist')
-
