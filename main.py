@@ -102,9 +102,9 @@ if __name__ == "__main__":
 
     #Import dataset
     dataset_name = config["dataset"]["name"]
-    (data_train, labels_train), (data_test, labels_test) = import_dataset(dataset_name, split=0.2, shuffle=True, extra_args=config["dataset"]["extra_args"])
+    (data_train, labels_train_dict), (data_test, labels_test) = import_dataset(dataset_name, split=0.2, shuffle=True, extra_args=config["dataset"]["extra_args"])
 
-    print(data_train.shape, labels_train.shape)
+    print(data_train.shape, labels_train_dict['clean'].shape)
 
     #Define writer and prepare the tensorboard
     try:
@@ -122,6 +122,7 @@ if __name__ == "__main__":
 
     models = []
     if config["training"]["mode"] == "cross_training":
+        labels_train = labels_train_dict['clean']
         cross_training = config["training"]["extra_args"]["nb_models"]
         for training_iter in range(cross_training):
             if cross_training != 1 and config["training"]["extra_args"]["shared_data"]<1:
@@ -162,9 +163,13 @@ if __name__ == "__main__":
                 writer.close()  
                 
     elif config["training"]["mode"] == "relabelling":
+        labels_train = labels_train_dict['noisy']
+        label_train_clean = labels_train_dict['clean']
+        old_nb_correct = np.where(label_train_clean==labels_train)[0].shape[0]
+        print(f"Correct labels: {old_nb_correct}/{len(labels_train)}")
+        
         nb_iterations = config["training"]["extra_args"]["nb_iter"]
         nb_models = config["training"]["extra_args"]["nb_models"]
-        
         data_test_tensor = torch.as_tensor(data_test, dtype=torch.float32, device=config["device"])
         labels_test_tensor = torch.as_tensor(labels_test, dtype=torch.float32, device=config["device"])
         
@@ -193,19 +198,34 @@ if __name__ == "__main__":
                     train_epoch_initializer(epoch=epoch, data=data_train, data_labels=labels_train)
                     torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(training_iter) +"_" + str(incr_model) + ".pth")
                 
-                pred_probs = model(data_test)
-                accuracy = torch.mean(torch.where(torch.round(pred_probs)==labels_test, 1., 0.))
+                model.eval() #Don't forget to pass it to eval so dropout and batch norm don't bother
+                
+                pred_probs = model(data_test_tensor)
+                accuracy = torch.mean(torch.where(torch.round(pred_probs)==labels_test_tensor, 1., 0.))
                 print(f"training_iter: [{training_iter+1}/{nb_iterations}], model: [{incr_model+1}/{nb_models}], accuracy: {accuracy}")    
+                
                 models.append(model)
             
             # Define new label  
-            new_labels = torch.as_tensor(labels_train, dtype=torch.float32, device=config["device"])
+            new_labels = np.copy(labels_train)
             data_tensor = torch.as_tensor(data_train, dtype=torch.float32, device=config["device"])
-            new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]>=0.7, True, False) for model in models])] = 1
-            new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]<=1-0.7, True, False) for model in models])] = 0
-            print(f"{np.where(new_labels.cpu().numpy()[:,0]==labels_train[:,0])[0].shape}/{len(labels_train)}")
+            if config["training"]["extra_args"]["mode"] == "democratic":
+                labels_mean = np.mean(np.array([np.round(model(data_tensor)[:, 0].detach().cpu().numpy()) for model in models]), axis=0)
+                new_labels[labels_mean>=0.8] = 1
+                new_labels[labels_mean<=1-0.8] = 0
+            elif config["training"]["extra_args"]["mode"] == "unanimity":
+                new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]>=0.7, True, False) for model in models])] = 1
+                new_labels[logical_and_arrays([torch.where(model(data_tensor)[:, 0]<=1-0.7, True, False) for model in models])] = 0
+            else:
+                raise ValueError("This mode for relabelling doesn't exist.")
+            new_nb_correct = np.where(label_train_clean==new_labels)[0].shape[0]
             
-            labels_train = new_labels.cpu().numpy()
+            print(f"Previous labels:{np.where(new_labels[:,0]==labels_train[:,0])[0].shape}/{len(labels_train)}")            
+            print(f"Correct labels: {new_nb_correct}/{len(new_labels)}")
+            print(f"Pourcentage of correct labels in labels that were changed: {(1+(new_nb_correct-old_nb_correct)/(len(labels_train) - np.where(new_labels[:,0]==labels_train[:,0])[0].shape[0]))/2}")
+            
+            old_nb_correct = new_nb_correct
+            labels_train = new_labels
             
             print(f"total signal: {np.where(labels_train == 1)[0].shape}/{len(labels_train)/2}")
             print(f"total noise: {np.where(labels_train == 0)[0].shape}/{len(labels_train)/2}")
@@ -223,6 +243,7 @@ if __name__ == "__main__":
                 print("perf_rounded: ", np.where(np.round(pred_probs_rounded[:, 0]) == noisy_label[:, 0])[0].shape[0], len(noisy_label))
 
     elif config["training"]["mode"] == "testing":
+        labels_train = labels_train_dict['clean']
         #Create model for training 
         models = []
         for folder in os.listdir(f"./Models/{dataset_name}"):

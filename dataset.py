@@ -47,6 +47,7 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         
     if max_classes is not None:
         if type(max_classes) == int:
+            max_classes_size = max_classes
             if max_classes <10:
                 indicies_train = np.where(labels_train<max_classes)[0]
                 data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
@@ -55,6 +56,7 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
                 data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
                 
         elif(type(max_classes) == list):
+            max_classes_size = len(max_classes)
             indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
             for incr in range(len(max_classes)):
                 labels_train[indicies_train[incr]] = incr
@@ -69,9 +71,11 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         
     #We add noise in the 1 class
     if extra_args["impurity_level"]>0:
-        labels_train = add_impurity(labels_train, max_classes, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
-
-    return (data_train, labels_train), (data_test, labels_test)
+        labels_train_impure = add_impurity(labels_train, max_classes_size, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
+    
+    labels_train_dict = {'clean': labels_train, 'noisy': labels_train_impure}
+    
+    return (data_train, labels_train_dict), (data_test, labels_test)
     
 def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     print(Warning("Split is not supported for Cifar yet"))
@@ -84,6 +88,7 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         
     if max_classes is not None:
         if type(max_classes) == int:
+            max_classes_size = max_classes
             if max_classes <10:
                 indicies_train = np.where(labels_train<max_classes)[0]
                 data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
@@ -92,6 +97,7 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
                 data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
                 
         elif(type(max_classes) == list):
+            max_classes_size = len(max_classes)
             indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
             for incr in range(len(max_classes)):
                 labels_train[indicies_train[incr]] = incr
@@ -106,14 +112,16 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         
     #We add noise in the 1 class
     if extra_args["impurity_level"]>0:
-        labels_train = add_impurity(labels_train, max_classes, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
-
-    return (data_train, labels_train), (data_test, labels_test)
+        labels_train_impure = add_impurity(labels_train, max_classes_size, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
+    
+    labels_train_dict = {'clean': labels_train, 'noisy': labels_train_impure}
+    
+    return (data_train, labels_train_dict), (data_test, labels_test)
     
 def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]): 
     noise_file = torch.load('./data/CIFAR-10_human.pt')
-    random_label = noise_file['random_label1']
-    random_label = np.expand_dims(random_label, axis=-1)
+    labels_rand = noise_file['worse_label']
+    labels_rand = np.expand_dims(labels_rand, axis=-1)
     
     max_classes = 10
     if "max_classes" in extra_args:
@@ -121,14 +129,11 @@ def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
         
     (data_train, labels_train), (data_test, labels_test) = cifar10.load_data()
     
-    labels_train = random_label
-    
     if max_classes is not None:
         if type(max_classes) == int:
             if max_classes <10:
-                indicies_train = np.where(labels_train<max_classes)[0]
-                data_train, labels_train = data_train[indicies_train], labels_train[indicies_train]
-                
+                indicies_train = np.where((labels_train<max_classes) & (labels_rand<max_classes))[0]
+                data_train, new_labels, labels_train = data_train[indicies_train], labels_rand[indicies_train], labels_train[indicies_train]           
                 indicies_test = np.where(labels_test<max_classes)[0]
                 data_test, labels_test = data_test[indicies_test], labels_test[indicies_test]
                 
@@ -136,7 +141,13 @@ def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
             indicies_train = [labels_train[:, 0] == elem for elem in max_classes]
             for incr in range(len(max_classes)):
                 labels_train[indicies_train[incr]] = incr
-            data_train, labels_train = data_train[logical_or_arrays(indicies_train)], labels_train[logical_or_arrays(indicies_train)]
+            
+            indicies_rand = [labels_rand[:, 0] == elem for elem in max_classes]
+            for incr in range(len(max_classes)):
+                labels_rand[indicies_rand[incr]] = incr
+                
+            indicies = logical_and_arrays([logical_or_arrays(indicies_train), logical_or_arrays(indicies_rand)])
+            data_train, new_labels, labels_train = data_train[indicies], labels_rand[indicies], labels_train[indicies]
             
             indicies_test = [labels_test[:, 0] == elem for elem in max_classes]
             for incr in range(len(max_classes)):
@@ -147,7 +158,8 @@ def import_noisy_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     
     data_train, data_test = np.swapaxes(np.swapaxes(data_train, 2, 3), 1, 2)/255, np.swapaxes(np.swapaxes(data_test, 2, 3), 1, 2)/255
     
-    return (data_train, labels_train), (data_test, labels_test)
+    labels_train_dict = {'clean': labels_train, 'noisy': new_labels}
+    return (data_train, labels_train_dict), (data_test, labels_test)
     
 def import_noise_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     """Import only a file with noise
@@ -241,5 +253,5 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(1-split)),)), np.zeros((int(data_size_noise*(1-split)),))]), axis=1)
     labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(split)),)), np.zeros((int(data_size_noise*(split)),))]), axis=1)
         
-    
-    return (data_train, labels_train), (data_test, labels_test)
+    labels_train_dict = {'clean': labels_train, 'noisy': None}
+    return (data_train, labels_train_dict), (data_test, labels_test)
