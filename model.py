@@ -44,8 +44,8 @@ class ResNet1d18(F.Module):
         )
 
         self.layer2 = F.Sequential(
-            resblock(16, 32, kernel_size=7, downsample=True),
-            resblock(32, 32, kernel_size=7, downsample=False)
+            resblock(16, 32, kernel_size=kernel_size, downsample=True),
+            resblock(32, 32, kernel_size=kernel_size, downsample=False)
         )
 
         self.layer3 = F.Sequential(
