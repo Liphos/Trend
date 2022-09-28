@@ -5,3 +5,4 @@ __pycache__/
 
 Models
 *.bin
+wandb/
