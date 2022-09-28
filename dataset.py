@@ -111,9 +111,10 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
             raise TypeError("max_classes has not the good type")
         
     #We add noise in the 1 class
+    labels_train_impure = np.copy(labels_train)
     if extra_args["impurity_level"]>0:
         labels_train_impure = add_impurity(labels_train, max_classes_size, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
-    
+
     labels_train_dict = {'clean': labels_train, 'noisy': labels_train_impure}
     
     return (data_train, labels_train_dict), (data_test, labels_test)
@@ -253,5 +254,5 @@ def import_data_TREND(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     labels_train = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(1-split)),)), np.zeros((int(data_size_noise*(1-split)),))]), axis=1)
     labels_test = np.expand_dims(np.concatenate([np.ones((int(data_size_signal*(split)),)), np.zeros((int(data_size_noise*(split)),))]), axis=1)
         
-    labels_train_dict = {'clean': labels_train, 'noisy': None}
+    labels_train_dict = {'clean': labels_train, 'noisy': labels_train}
     return (data_train, labels_train_dict), (data_test, labels_test)

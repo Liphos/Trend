@@ -32,50 +32,44 @@ class ResNet1d18(F.Module):
     def __init__(self, in_channels:int, resblock:F.Module=_ResBlock1d, kernel_size:int=3, outputs:int=1000, last_activation:str=None):
         super().__init__()
         self.layer0 = F.Sequential(
-            F.Conv1d(in_channels, 16, kernel_size=15, stride=2, padding=7),
+            F.Conv1d(in_channels, 32, kernel_size=15, stride=2, padding=7),
             F.MaxPool1d(kernel_size=3, stride=2, padding=1),
-            F.BatchNorm1d(16),
+            F.BatchNorm1d(32),
             F.ReLU()
         )
 
-        self.layer1 = F.Sequential(
-            resblock(16, 16, kernel_size=kernel_size, downsample=False),
-            resblock(16, 16, kernel_size=kernel_size, downsample=False)
-        )
-
         self.layer2 = F.Sequential(
-            resblock(16, 32, kernel_size=kernel_size, downsample=True),
-            resblock(32, 32, kernel_size=kernel_size, downsample=False)
-        )
-
-        self.layer3 = F.Sequential(
             resblock(32, 64, kernel_size=kernel_size, downsample=True),
             resblock(64, 64, kernel_size=kernel_size, downsample=False)
         )
 
-        self.layer4 = F.Sequential(
+        self.layer3 = F.Sequential(
             resblock(64, 128, kernel_size=kernel_size, downsample=True),
             resblock(128, 128, kernel_size=kernel_size, downsample=False)
         )
 
-        self.gap = torch.nn.AdaptiveAvgPool1d(1)
-        self.fc = torch.nn.Linear(128, outputs)
+        self.layer4 = F.Sequential(
+            resblock(128, 256, kernel_size=kernel_size, downsample=True),
+            resblock(256, 256, kernel_size=kernel_size, downsample=False)
+        )
+
+        self.dense1 = F.Linear(24*256, 512)
+        self.dense2 = F.Linear(512, outputs)
         self.flatten = F.Flatten()
-        
+        self.dropout = F.Dropout(0.2)
         if last_activation == "Sigmoid":
             self.last_activation = torch.nn.Sigmoid()
         else:
             self.last_activation = torch.nn.Identity()
         
     def forward(self, input):
-        input = self.layer0(input)
-        #input = self.layer1(input) #We remove it because otherwise the model is to dense
-        input = self.layer2(input)
-        input = self.layer3(input)
-        input = self.layer4(input)
-        input = self.gap(input)
-        input = self.flatten(input)
-        input = self.fc(input)
+        input = self.dropout(self.layer0(input))
+        input = self.dropout(self.layer2(input))
+        input = self.dropout(self.layer3(input))
+        input = self.dropout(self.layer4(input))
+        input = self.dropout(self.flatten(input))
+        input = F.ReLU()(self.dense1(input))
+        input = (self.dense2(input))
         output = self.last_activation(input)
         return output
     
@@ -145,7 +139,6 @@ class ResnetImgModel(F.Module):
                 f.write(str(layer._get_name) + "\n")
         f.close()
 
-
 class SimpleSignalModel(F.Module):
     def __init__(self, last_activation:str=None):
         super(SimpleSignalModel, self).__init__()
@@ -175,6 +168,12 @@ class SimpleSignalModel(F.Module):
         self.batch_norm4 = F.BatchNorm1d(64)
         self.layers.append(self.batch_norm4)
         
+        self.conv5 = F.Conv1d(64, 64, kernel_size=7, padding=3)
+        self.layers.append(self.conv3)
+        
+        self.batch_norm5 = F.BatchNorm1d(64)
+        self.layers.append(self.batch_norm4)
+        
         self.dense1 = F.Linear(12*64, 512)
         self.layers.append(self.dense1)
         self.dense2 = F.Linear(512, 1)
@@ -199,13 +198,15 @@ class SimpleSignalModel(F.Module):
         x = self.maxpool(self.conv1(x))
         x = self.dropout(self.activation(self.batch_norm1(x)))
         
-        x = self.dropout(self.activation(self.activation(self.batch_norm2(self.conv2(x))) + x))
-        x = self.maxpool(x)
-        
+        x = self.dropout(self.activation(self.batch_norm2(self.conv2(x))))
+                
         x = self.dropout(self.activation(self.activation(self.batch_norm3(self.conv3(x))) + x))
         x = self.maxpool(x)
         
         x = self.dropout(self.activation(self.activation(self.batch_norm4(self.conv4(x))) + x))
+        x = self.maxpool(x)
+        
+        x = self.dropout(self.activation(self.activation(self.batch_norm5(self.conv5(x))) + x))
         #x = self.maxpool(x)
         
         x = self.flatten(x)

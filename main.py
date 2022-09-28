@@ -17,10 +17,11 @@ import wandb
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import import_dataset, add_impurity
-from utils.utils import create_batch_tensorboard, logical_and_arrays, focal_loss, mentorMixLoss
+from utils.utils import create_batch_tensorboard, logical_and_arrays, focal_loss
+from mentorMix import MentorMix
 from yml_reader import read_config
 
-def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Module, training_iter:int, epoch:int, data:np.ndarray, data_labels:np.ndarray, optimizer=None, lr_scheduler=None, criterion:torch.nn=None, writer:SummaryWriter=None, is_testing:bool=False, add_gauss_noise:float=0):
+def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Module, training_iter:int, epoch:int, data:np.ndarray, data_labels:np.ndarray, optimizer=None, lr_scheduler=None, criterion:torch.nn=None, writer:SummaryWriter=None, is_testing:bool=False, add_gauss_noise:float=0, mentorMix_model:MentorMix=None):
     size = len(data)
     batch_size = config["training"]["batch_size"]
     #We shuffle the dataset
@@ -38,7 +39,6 @@ def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Modu
     mean_loss = 0
     mean_accuracy = 0
     mean_counter = 0
-    loss_p_previous = 0
     for i in range(int(size/batch_size)+1):
         inputs, labels = data[i*batch_size: np.minimum((i+1)*batch_size, size)], data_labels[i*batch_size: np.minimum((i+1)*batch_size, size)] #We normalize the inputs
         # Every data instance is an input + label pair
@@ -54,7 +54,9 @@ def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Modu
             # Zero your gradients for every batch!
             optimizer.zero_grad()
             if config["training"]["use_mentorMix"]:
-                loss, outputs, loss_p_previous = mentorMixLoss(model, inputs, labels, loss_p_previous, config)
+                loss, outputs, loss_p_previous = mentorMix_model.mentorMixLoss(model, inputs, labels, config)
+                mentorMix_model.loss_p_previous = loss_p_previous
+                wandb.log({f"ema": mentorMix_model.loss_p_previous})
             else:
                 # Make predictions for this batch
                 outputs = model(inputs)
@@ -85,10 +87,7 @@ def train_epoch(config:Dict[str, Union[str,int, List[int]]], model:torch.nn.Modu
                         "lr": lr_scheduler.get_last_lr()[0],
             })
             
-            if config["training"]["use_mentorMix"]:
-                wandb.log({f"ema_{key}": loss_p_previous})
             
-        
         mean_loss = (mean_loss * mean_counter + loss )/(mean_counter + 1)
         mean_accuracy = (mean_accuracy * mean_counter + accuracy )/(mean_counter + 1)
         mean_counter += 1
@@ -137,6 +136,7 @@ if __name__ == "__main__":
 
     #training
 
+    mentorMix_model = MentorMix()
 
     models = []
     if config["training"]["mode"] == "cross_training":
@@ -171,10 +171,11 @@ if __name__ == "__main__":
             #training
             for epoch in range(config["training"]["num_epochs"]):
                 print(f"training_iter: [{training_iter+1}/{cross_training}], epoch: {epoch}, lr: {lr_scheduler.get_last_lr()}")
-                train_epoch_initializer(epoch=epoch, data=data_train_split, data_labels=labels_train_split, add_gauss_noise=config["training"]["extra_args"]["add_gauss_noise"])
+                train_epoch_initializer(epoch=epoch, data=data_train_split, data_labels=labels_train_split, add_gauss_noise=config["training"]["extra_args"]["add_gauss_noise"], mentorMix_model=mentorMix_model)
                 train_epoch_initializer(epoch=epoch, data=data_test, data_labels=labels_test, is_testing=True)
                 
                 #We test the model and save the performance to plot it.
+                """
                 with torch.no_grad():
                     model.eval()
                     outputs_train = model(torch.as_tensor(data_train, dtype=torch.float32, device=config["device"])).detach().cpu().numpy()
@@ -183,9 +184,10 @@ if __name__ == "__main__":
                     outputs_test = model(torch.as_tensor(data_test, dtype=torch.float32, device=config["device"])).detach().cpu().numpy()
                     performance[training_iter, epoch, 1] = np.mean(np.where(np.round(outputs_test)==labels_test, 1., 0.))
                     model.train()
-                    if epoch % 2 == 0:
-                        torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
-            
+                """
+                if epoch % 2 == 0:
+                    torch.save(model.state_dict(), tensorboard_log_dir + "/checkpoint" + str(epoch) +"_" + str(training_iter) + ".pth")
+                
             models.append(model)
             if writer is not None:
                 writer.flush()
@@ -219,6 +221,7 @@ if __name__ == "__main__":
             for incr_model in range(nb_models):
                 model = config["model"]["name"](**config["model"]["extra_args"]).to(config["device"])
 
+                mentorMix_model = MentorMix()
                 #Define loss funct and optimizer
                 if config["loss"]["name"] == "Focal":
                     criterion = partial(focal_loss, reduction='mean', **config["loss"]["extra_args"])
@@ -230,7 +233,7 @@ if __name__ == "__main__":
                 writer = SummaryWriter(log_dir=tensorboard_log_dir + "/" + str(training_iter) + "_" + str(incr_model))
                 create_batch_tensorboard(tensorboard_log_dir)
                 
-                train_epoch_initializer = partial(train_epoch, config=config, model=model, training_iter=training_iter, optimizer=optimizer, lr_scheduler=lr_scheduler, criterion=criterion, writer=writer)
+                train_epoch_initializer = partial(train_epoch, config=config, model=model, training_iter=training_iter, optimizer=optimizer, lr_scheduler=lr_scheduler, criterion=criterion, writer=writer, mentorMix_model=mentorMix_model)
                 
                 #training
                 nb_epochs = config["training"]["num_epochs"]
@@ -247,18 +250,22 @@ if __name__ == "__main__":
                 models.append(model)
             
             # Define new label  
-            new_labels = np.copy(labels_train)
-            data_tensor = torch.as_tensor(data_train, dtype=torch.float32, device=config["device"])
-            if config["training"]["extra_args"]["mode"] == "democratic":
-                labels_mean = np.mean(np.array([np.round(model(data_tensor)[:, 0].detach().cpu().numpy()) for model in models]), axis=0)
-                new_labels[labels_mean>=0.8] = 1
-                new_labels[labels_mean<=1-0.8] = 0
-            elif config["training"]["extra_args"]["mode"] == "unanimity":
-                new_labels[logical_and_arrays([np.where(model(data_tensor)[:, 0].detach().cpu().numpy()>=0.7, True, False) for model in models])] = 1
-                new_labels[logical_and_arrays([np.where(model(data_tensor)[:, 0].detach().cpu().numpy()<=1-0.7, True, False) for model in models])] = 0
-            else:
-                raise ValueError("This mode for relabelling doesn't exist.")
-            new_nb_correct = np.where(label_train_clean==new_labels)[0].shape[0]
+            with torch.no_grad():
+                new_labels = np.copy(labels_train)
+                size = len(data_train)
+                batch_size = config["training"]["batch_size"]
+                for batch in range(int(size/batch_size) + 1):
+                    data_tensor = torch.as_tensor(data_train[batch*(int(size/batch_size) + 1): (batch + 1) * (int(size/batch_size) + 1)], dtype=torch.float32, device=config["device"])
+                    if config["training"]["extra_args"]["mode"] == "democratic":
+                        labels_mean = np.mean(np.array([np.round(model(data_tensor)[:, 0].detach().cpu().numpy()) for model in models]), axis=0)
+                        new_labels[batch*(int(size/batch_size) + 1): (batch + 1) * (int(size/batch_size) + 1)][labels_mean>=0.8] = 1
+                        new_labels[batch*(int(size/batch_size) + 1): (batch + 1) * (int(size/batch_size) + 1)][labels_mean<=1-0.8] = 0
+                    elif config["training"]["extra_args"]["mode"] == "unanimity":
+                        new_labels[batch*(int(size/batch_size) + 1): (batch + 1) * (int(size/batch_size) + 1)][logical_and_arrays([np.where(model(data_tensor)[:, 0].detach().cpu().numpy()>=0.7, True, False) for model in models])] = 1
+                        new_labels[batch*(int(size/batch_size) + 1): (batch + 1) * (int(size/batch_size) + 1)][logical_and_arrays([np.where(model(data_tensor)[:, 0].detach().cpu().numpy()<=1-0.7, True, False) for model in models])] = 0
+                    else:
+                        raise ValueError("This mode for relabelling doesn't exist.")
+                new_nb_correct = np.where(label_train_clean==new_labels)[0].shape[0]
             
             print(f"Previous labels:{np.where(new_labels[:,0]==labels_train[:,0])[0].shape}/{len(labels_train)}")            
             print(f"Correct labels: {new_nb_correct}/{len(new_labels)}")
