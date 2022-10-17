@@ -16,3 +16,16 @@ for run in runs:
         
         plt.plot(history["_step"].values, history["Metrics_train/TPR"].values)
         plt.show(block=True)
+
+impurity = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+data_mnist = [0.01, 0.03, 0.06, 0.16, 0.39, 0.5, 0.6]
+data_cifar = [0.03, 0.08, 0.17, 0.26, 0.41, 0.5, 0.6]
+
+plt.plot(impurity, impurity)
+plt.plot(impurity, data_mnist)
+plt.plot(impurity, data_cifar)
+plt.title("Relabellisation on trend and cifar dataset")
+plt.xlabel("impurity at iteration 0")
+plt.ylabel("impurity at iteration 5")
+plt.legend(["y=x","Mnist", "Cifar"])
+plt.show()

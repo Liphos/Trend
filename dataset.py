@@ -26,21 +26,24 @@ def import_dataset(name:str, split:float=0.2, shuffle=True, extra_args:Dict[str,
     else:
         raise ValueError("This key is not associated with a dataset")
     
-def add_impurity(labels:np.ndarray, nb_classes:int, impure_class:int, impurity_level:float):
+def add_impurity(labels:np.ndarray, impurity_level:float, nb_classes:int, impure_class:int=None):
     if impurity_level == 0:
         return labels
     assert np.max(labels) <=1, "this is for biclassification"
-    indicies_impure = np.where((np.random.rand(labels.shape[0])<impurity_level) & (labels[:, 0]==impure_class))[0]
+    if impure_class is None:
+        indicies_impure = np.where((np.random.rand(labels.shape[0])<impurity_level))[0]    
+    else:
+        indicies_impure = np.where((np.random.rand(labels.shape[0])<impurity_level) & (labels[:, 0]==impure_class))[0]
     if nb_classes == 2:
-        labels[indicies_impure] = 1 - impure_class
+        labels[indicies_impure] = 1 - labels[indicies_impure]
     else:
         raise ValueError("Not implemented yet")
-    return labels
 
 def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     print(Warning("Split is not supported for MNIST yet"))
     (data_train, labels_train), (data_test, labels_test) = mnist.load_data()
-    
+    data_train, data_test = np.expand_dims(data_train, axis=1), np.expand_dims(data_test, axis=1)
+    labels_train, labels_test = np.expand_dims(labels_train, axis=-1), np.expand_dims(labels_test, axis=-1)
     max_classes = 10
     if "max_classes" in extra_args:
         max_classes = extra_args["max_classes"]
@@ -70,8 +73,9 @@ def import_mnist(split:float, shuffle:bool, extra_args:Dict[str, bool]):
             raise TypeError("MaxClasses is not the good type")
         
     #We add noise in the 1 class
+    labels_train_impure = np.copy(labels_train)
     if extra_args["impurity_level"]>0:
-        labels_train_impure = add_impurity(labels_train, max_classes_size, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
+        add_impurity(labels_train_impure, impurity_level=extra_args["impurity_level"], nb_classes=max_classes_size, impure_class=extra_args["impure_class"] if "impure_class" in extra_args.keys() else None)
     
     labels_train_dict = {'clean': labels_train, 'noisy': labels_train_impure}
     
@@ -113,7 +117,7 @@ def import_cifar10(split:float, shuffle:bool, extra_args:Dict[str, bool]):
     #We add noise in the 1 class
     labels_train_impure = np.copy(labels_train)
     if extra_args["impurity_level"]>0:
-        labels_train_impure = add_impurity(labels_train, max_classes_size, impure_class=extra_args["impure_class"], impurity_level=extra_args["impurity_level"])
+        add_impurity(labels_train_impure, impurity_level=extra_args["impurity_level"], nb_classes=max_classes_size, impure_class=extra_args["impure_class"] if "impure_class" in extra_args.keys() else None)
 
     labels_train_dict = {'clean': labels_train, 'noisy': labels_train_impure}
     
